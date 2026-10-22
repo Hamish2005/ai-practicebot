@@ -119,7 +119,7 @@ Active sessions expire after two hours without a saved update. Completed results
 
 After deploying this fix, reload and start a new session. Sessions lost from the old in-memory deployment cannot be recovered. Verify that Netlify lists the `cleanup-sessions` scheduled function, and test a new live session through ending and score display. Storage failures return a retryable error rather than silently falling back to memory.
 
-Custom scenario/rubric authoring still uses local files and needs its own shared repository before it can reliably save on Netlify. This session fix does not migrate that library to Airtable or implement SkyPrep authentication/reporting.
+On Netlify, authored scenarios and rubrics persist in a separate `practice-scenarios` Blobs store across deployments. Conditional writes prevent concurrent edits from overwriting one another. This library is not subject to session expiry or score cleanup. Local development still uses `data/scenarios`; existing local files are not automatically uploaded. Airtable and SkyPrep integration are not implemented.
 
 Storage API: [Netlify Blobs](https://docs.netlify.com/build/data-and-storage/netlify-blobs/). Cleanup: [scheduled functions](https://docs.netlify.com/build/functions/scheduled-functions/).
 

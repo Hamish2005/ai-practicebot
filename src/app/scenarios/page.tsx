@@ -78,7 +78,7 @@ export default async function ScenarioLibrary({
             Learners receive their scores even when they end early.
           </p>
           <p>
-            Scenarios are saved in this local workspace. Editing a scenario
+            Scenarios are saved in this workspace. Editing a scenario
             updates future sessions; conversations already started keep their
             original rubric.
           </p>

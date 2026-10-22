@@ -57,7 +57,7 @@ export async function saveScenarioRequest(request: NextRequest, id?: string) {
     return NextResponse.json(
       {
         error:
-          "The scenario could not be saved. Your edits are still in the form. Check the local data directory and retry.",
+          "The scenario could not be saved. Your edits are still in the form. Please retry in a moment.",
       },
       { status: 500 },
     );

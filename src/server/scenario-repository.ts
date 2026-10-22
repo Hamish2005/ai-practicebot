@@ -1,4 +1,6 @@
 import "server-only";
+import { getStore } from "@netlify/blobs";
+import { sharedSessionsEnabled } from "./store";
 import {
   mkdir,
   readdir,
@@ -134,11 +136,103 @@ export function createScenarioRepository(directory: string) {
   }
   return { get, list, save };
 }
+export function createSharedScenarioRepository(
+  store = getStore({ name: "practice-scenarios", consistency: "strong" }),
+) {
+  async function read(id: string) {
+    scenarioIdSchema.parse(id);
+    const saved = await store.getWithMetadata(id, { type: "json" });
+    if (!saved) return null;
+    const record = storedSchema.parse(saved.data);
+    if (record.scenario.id !== id || !saved.etag)
+      throw new ScenarioStoreError(
+        "A saved scenario could not be read. Please retry.",
+        500,
+      );
+    return { record, etag: saved.etag };
+  }
+  async function get(id: string): Promise<ScenarioRecord | null> {
+    scenarioIdSchema.parse(id);
+    if (id === duplicateCharge.id) return structuredClone(builtIn);
+    return (await read(id))?.record ?? null;
+  }
+  async function list(): Promise<ScenarioRecord[]> {
+    const custom: ScenarioRecord[] = [];
+    for await (const page of store.list({ paginate: true })) {
+      const records = await Promise.all(page.blobs.map(({ key }) => get(key)));
+      custom.push(
+        ...records.filter(
+          (record): record is ScenarioRecord =>
+            record !== null && !record.builtIn,
+        ),
+      );
+    }
+    return [
+      structuredClone(builtIn),
+      ...custom.sort((a, b) =>
+        a.scenario.title.localeCompare(b.scenario.title),
+      ),
+    ];
+  }
+  async function save(
+    scenario: Scenario,
+    id?: string,
+    revision?: number,
+  ): Promise<ScenarioRecord> {
+    const parsed = authoredScenarioSchema.parse(scenario);
+    const key = id ? scenarioIdSchema.parse(id) : randomUUID();
+    if (key === duplicateCharge.id)
+      throw new ScenarioStoreError(
+        "Duplicate the sample scenario to customize it.",
+        403,
+      );
+    const existing = id ? await read(key) : null;
+    if (id && !existing)
+      throw new ScenarioStoreError("Scenario not found.", 404);
+    const conflict = () =>
+      new ScenarioStoreError(
+        "This scenario was edited elsewhere. Reload the editor before saving again.",
+        409,
+      );
+    if (existing && revision !== existing.record.revision) throw conflict();
+    const record: ScenarioRecord = {
+      scenario: {
+        ...parsed,
+        id: key,
+        objectives: parsed.objectives.map((o) => ({
+          ...o,
+          acceptableExamples: o.scoringRubric!.met.examples,
+          unacceptableExamples: o.scoringRubric!.not_met.examples,
+        })),
+      },
+      revision: (existing?.record.revision ?? 0) + 1,
+      updatedAt: new Date().toISOString(),
+      builtIn: false,
+    };
+    const result = await store.setJSON(
+      key,
+      record,
+      existing ? { onlyIfMatch: existing.etag } : { onlyIfNew: true },
+    );
+    if (!result.modified) throw conflict();
+    return record;
+  }
+  return { get, list, save };
+}
 const scope = globalThis as unknown as {
   practiceScenarioRepository?: ReturnType<typeof createScenarioRepository>;
 };
-export const scenarioRepository = (scope.practiceScenarioRepository ??=
-  createScenarioRepository(
+let shared: ReturnType<typeof createSharedScenarioRepository> | undefined;
+function repository() {
+  if (sharedSessionsEnabled())
+    return (shared ??= createSharedScenarioRepository());
+  return (scope.practiceScenarioRepository ??= createScenarioRepository(
     process.env.SCENARIO_DATA_DIR?.trim() ||
       join(process.cwd(), "data", "scenarios"),
   ));
+}
+export const scenarioRepository: ReturnType<typeof createScenarioRepository> = {
+  get: (id) => repository().get(id),
+  list: () => repository().list(),
+  save: (scenario, id, revision) => repository().save(scenario, id, revision),
+};
