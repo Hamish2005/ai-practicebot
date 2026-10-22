@@ -1,0 +1,4 @@
+[build.environment]
+  # Public provider/model identifiers occur in source code and documentation.
+  # Keep secret scanning enabled for OPENAI_API_KEY and all other credentials.
+  SECRETS_SCAN_OMIT_KEYS = "AI_PROVIDER,OPENAI_MODEL"
