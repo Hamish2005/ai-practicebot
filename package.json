@@ -1,0 +1,42 @@
+{
+  "name": "conversation-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:live": "node scripts/test-live.mjs",
+    "test:voice": "node scripts/test-voice.mjs",
+    "test:browser": "playwright test",
+    "benchmark": "vitest run tests/scoring-benchmark.test.ts",
+    "benchmark:report": "node scripts/score-benchmark.mjs"
+  },
+  "dependencies": {
+    "next": "16.3.5",
+    "openai": "7.15.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "server-only": "0.0.1",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "22.20.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.5",
+    "prettier": "3.9.7",
+    "tailwindcss": "4.3.3",
+    "typescript": "6.0.3",
+    "vitest": "5.0.1"
+  }
+}
