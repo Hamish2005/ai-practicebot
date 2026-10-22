@@ -172,6 +172,8 @@ describe("shared temporary sessions", () => {
     expect(blobs.records.size).toBe(1);
     vi.advanceTimersByTime(SESSION_TTL + 1);
     expect(await store.get("sample")).toBeUndefined();
+    expect(blobs.records.size).toBe(1);
+    await store.cleanup();
     expect(blobs.records.size).toBe(0);
   });
   it("does not report storage outages as expired sessions or expose service errors", async () => {

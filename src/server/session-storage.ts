@@ -1,4 +1,5 @@
 import { getStore } from "@netlify/blobs";
+import { blobOperation } from "./blob-operation";
 import type { Session } from "../engine/types";
 import type { Scenario } from "../engine/schema";
 
@@ -29,7 +30,12 @@ export function temporaryStore() {
 }
 export class SessionStorageError extends Error {}
 
-export function createSharedSessionStorage(store = temporaryStore()) {
+export function createSharedSessionStorage(
+  store?: ReturnType<typeof temporaryStore>,
+) {
+  const run = <T>(
+    operation: (client: ReturnType<typeof temporaryStore>) => Promise<T>,
+  ) => (store ? operation(store) : blobOperation(sessionStoreName, operation));
   const versions = new WeakMap<SessionEntry, string>();
   async function removeExpired(
     id: string,
@@ -42,17 +48,21 @@ export function createSharedSessionStorage(store = temporaryStore()) {
     )
       return;
     // Claim expiry before deleting so a concurrent refresh cannot be removed.
-    const result = await store.setJSON(id, null, { onlyIfMatch: etag });
-    if (result.modified) await store.delete(id);
+    const result = await run((client) =>
+      client.setJSON(id, null, { onlyIfMatch: etag }),
+    );
+    if (result.modified) await run((client) => client.delete(id));
   }
   async function get(id: string): Promise<SessionEntry | undefined> {
     if (!id) return;
-    const record = await store.getWithMetadata(id, { type: "json" });
+    const record = await run((client) =>
+      client.getWithMetadata(id, { type: "json" }),
+    );
     if (!record) return;
     if (!record.etag) throw new SessionStorageError("Missing storage version");
     const entry = record.data as SessionEntry | null;
     if (!entry || expiresAt(entry) <= Date.now()) {
-      await removeExpired(id, entry, record.etag);
+      // The scheduled cleanup owns deletion; loading a page only needs a read.
       return;
     }
     if (entry.busy && (entry.leaseUntil ?? 0) <= Date.now()) entry.busy = false;
@@ -60,9 +70,11 @@ export function createSharedSessionStorage(store = temporaryStore()) {
     return entry;
   }
   async function create(entry: SessionEntry) {
-    const result = await store.setJSON(entry.state.id, entry, {
-      onlyIfNew: true,
-    });
+    const result = await run((client) =>
+      client.setJSON(entry.state.id, entry, {
+        onlyIfNew: true,
+      }),
+    );
     if (!result.modified)
       throw new SessionStorageError("Session creation conflict");
   }
@@ -71,9 +83,11 @@ export function createSharedSessionStorage(store = temporaryStore()) {
     const etag = versions.get(entry);
     if (!etag) throw new SessionStorageError("Missing session version");
     const leased = { ...entry, busy: true, leaseUntil: Date.now() + LEASE_TTL };
-    const result = await store.setJSON(entry.state.id, leased, {
-      onlyIfMatch: etag,
-    });
+    const result = await run((client) =>
+      client.setJSON(entry.state.id, leased, {
+        onlyIfMatch: etag,
+      }),
+    );
     if (!result.modified || !result.etag) return false;
     Object.assign(entry, leased);
     versions.set(entry, result.etag);
@@ -84,9 +98,11 @@ export function createSharedSessionStorage(store = temporaryStore()) {
     if (!etag) throw new SessionStorageError("Missing session lease");
     entry.busy = false;
     delete entry.leaseUntil;
-    const result = await store.setJSON(entry.state.id, entry, {
-      onlyIfMatch: etag,
-    });
+    const result = await run((client) =>
+      client.setJSON(entry.state.id, entry, {
+        onlyIfMatch: etag,
+      }),
+    );
     if (!result.modified)
       throw new SessionStorageError("Session changed; retry request");
     if (result.etag) versions.set(entry, result.etag);
@@ -94,17 +110,23 @@ export function createSharedSessionStorage(store = temporaryStore()) {
   async function remove(entry: SessionEntry) {
     const etag = versions.get(entry);
     if (!etag) throw new SessionStorageError("Missing session version");
-    const result = await store.setJSON(entry.state.id, null, {
-      onlyIfMatch: etag,
-    });
+    const result = await run((client) =>
+      client.setJSON(entry.state.id, null, {
+        onlyIfMatch: etag,
+      }),
+    );
     if (!result.modified)
       throw new SessionStorageError("Session changed; retry request");
-    await store.delete(entry.state.id);
+    await run((client) => client.delete(entry.state.id));
   }
   async function cleanup() {
-    for await (const page of store.list({ paginate: true })) {
+    for await (const page of (store ?? temporaryStore()).list({
+      paginate: true,
+    })) {
       for (const { key } of page.blobs) {
-        const record = await store.getWithMetadata(key, { type: "json" });
+        const record = await run((client) =>
+          client.getWithMetadata(key, { type: "json" }),
+        );
         if (record?.etag)
           await removeExpired(
             key,

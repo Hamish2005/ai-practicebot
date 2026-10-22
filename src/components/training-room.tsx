@@ -16,7 +16,14 @@ type Command =
   | { action: "end"; revision: number };
 
 async function loadSession(): Promise<PublicSession | null> {
-  const response = await fetch("/api/session");
+  let response: Response;
+  try {
+    response = await fetch("/api/session", {
+      signal: AbortSignal.timeout(12000),
+    });
+  } catch {
+    throw new Error("Could not restore your session in time. Please retry.");
+  }
   if (!response.ok)
     throw new Error("Could not restore your session. Please retry.");
   return (await response.json()).session;
