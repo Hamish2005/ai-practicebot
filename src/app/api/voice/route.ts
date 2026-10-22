@@ -1,6 +1,7 @@
+import { withSessionErrors } from "../../../server/session-errors";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { sessions, pruneSessions } from "../../../server/store";
+import { getSession, lockSession, releaseSession } from "../../../server/store";
 import { voiceProvider } from "../../../server/voice";
 
 export const runtime = "nodejs";
@@ -38,13 +39,12 @@ async function boundedBody(request: Request, limit: number) {
   return Buffer.concat(chunks);
 }
 
-export async function POST(request: NextRequest) {
+async function handlePost(request: NextRequest) {
   const origin = `${request.nextUrl.protocol}//${request.headers.get("host") ?? request.nextUrl.host}`;
   if (request.headers.get("origin") && request.headers.get("origin") !== origin)
     return fail("Cross-origin requests are not allowed.", 403);
-  pruneSessions();
   const id = request.cookies.get("practice_session")?.value ?? "";
-  const entry = sessions.get(id);
+  const entry = await getSession(id);
   if (!entry || entry.state.endedAt !== null)
     return fail("Start an active practice session to use voice.", 410);
   if (entry.busy || pending.has(id))
@@ -60,13 +60,18 @@ export async function POST(request: NextRequest) {
       "Voice needs OpenAI mode and an API key. You can still type your reply.",
       503,
     );
+  if (!(await lockSession(entry)))
+    return fail("Another request is processing. Please retry.", 409);
   pending.add(id);
   const revision = entry.state.revision;
-  const current = () =>
-    sessions.get(id) === entry &&
-    entry.state.revision === revision &&
-    entry.state.endedAt === null &&
-    !entry.busy;
+  const current = async () => {
+    const latest = await getSession(id);
+    return Boolean(
+      latest &&
+      latest.state.revision === revision &&
+      latest.state.endedAt === null,
+    );
+  };
   try {
     const multipart = request.headers
       .get("content-type")
@@ -120,14 +125,18 @@ export async function POST(request: NextRequest) {
     } catch {
       return fail("Invalid voice request.", 400);
     }
-    if (sessionId !== id || requestedRevision !== revision || !current())
+    if (
+      sessionId !== id ||
+      requestedRevision !== revision ||
+      !(await current())
+    )
       return fail("The conversation changed. Please try again.", 409);
     const start = performance.now();
     if (file) {
       const text = (
         await voiceProvider.transcribe(file, request.signal)
       ).trim();
-      if (!current())
+      if (!(await current()))
         return fail("The conversation changed. Please record again.", 409);
       if (!text)
         return fail("No speech was recognized. Please try again.", 422);
@@ -150,7 +159,7 @@ export async function POST(request: NextRequest) {
     )
       return fail("That bot reply is not available for playback.", 400);
     const audio = await voiceProvider.speak(message.content, request.signal);
-    if (!current())
+    if (!(await current()))
       return fail("The conversation changed. Playback was cancelled.", 409);
     return new Response(audio, {
       headers: {
@@ -171,5 +180,8 @@ export async function POST(request: NextRequest) {
     );
   } finally {
     pending.delete(id);
+    await releaseSession(entry);
   }
 }
+
+export const POST = withSessionErrors(handlePost);

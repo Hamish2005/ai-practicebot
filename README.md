@@ -39,7 +39,7 @@ For OpenAI mode, set `AI_PROVIDER=openai` and add your key in `.env.local`, then
 - `src/scenarios`: validated local scenario definitions and examples.
 - `src/engine`: provider interfaces, state transitions, pure controller, evidence validation, deterministic feedback. No Next.js or OpenAI imports.
 - `src/providers`: deterministic fake provider and server-only OpenAI adapter.
-- `src/server`: configuration, bounded in-memory store, and learner-safe response projection.
+- `src/server`: configuration, temporary session storage, and learner-safe response projection.
 - `src/app/api/session`: message validation, session ownership cookie, revision checks, and serialized updates.
 - `src/components`: learner workspace, review, and development-only Trainer View.
 
@@ -110,6 +110,18 @@ The session engine, scoring rubric and completion checks are unchanged. `/api/vo
 ## Recommended next milestone
 
 Review scores with trainers and test live voice with real microphones, accents and background noise. Measure end-of-speech to first audible response. Add authenticated author access, shared durable storage, and abuse controls before public hosting.
+
+## Netlify session storage
+
+On Netlify, text, recorded voice, and live voice share temporary sessions through Netlify Blobs. Runtime credentials are provided by Netlify; no additional API key is committed or sent to the browser. Local `next dev` still uses memory. Strong reads and conditional writes protect against overlapping requests on different function instances. A crashed request's lease expires after three minutes, and an older request cannot overwrite a newer committed version.
+
+Active sessions expire after two hours without a saved update. Completed results remain available for 15 minutes for response retries and page reloads. The `cleanup-sessions` scheduled function runs every 15 minutes in production and physically deletes expired entries; reads also remove expired entries. Cleanup failures can delay physical deletion. This is temporary recovery storage, not permanent score history. SkyPrep delivery is not implemented yet; its eventual confirmed-delivery cleanup will replace the completion grace period.
+
+After deploying this fix, reload and start a new session. Sessions lost from the old in-memory deployment cannot be recovered. Verify that Netlify lists the `cleanup-sessions` scheduled function, and test a new live session through ending and score display. Storage failures return a retryable error rather than silently falling back to memory.
+
+Custom scenario/rubric authoring still uses local files and needs its own shared repository before it can reliably save on Netlify. This session fix does not migrate that library to Airtable or implement SkyPrep authentication/reporting.
+
+Storage API: [Netlify Blobs](https://docs.netlify.com/build/data-and-storage/netlify-blobs/). Cleanup: [scheduled functions](https://docs.netlify.com/build/functions/scheduled-functions/).
 
 ## Live conversation
 

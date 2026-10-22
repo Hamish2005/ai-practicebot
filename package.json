@@ -19,6 +19,7 @@
     "benchmark:report": "node scripts/score-benchmark.mjs"
   },
   "dependencies": {
+    "@netlify/blobs": "11.1.6",
     "next": "16.3.5",
     "openai": "7.15.0",
     "react": "19.3.0",

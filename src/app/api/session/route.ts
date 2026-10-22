@@ -1,3 +1,4 @@
+import { withSessionErrors } from "../../../server/session-errors";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { duplicateCharge } from "../../../scenarios/duplicate-charge";
@@ -8,7 +9,15 @@ import {
 } from "../../../engine/session";
 import { messageSchema } from "../../../engine/schema";
 import { getProvider } from "../../../server/config";
-import { pruneSessions, sessions } from "../../../server/store";
+import {
+  getSession,
+  createSession,
+  lockSession,
+  releaseSession,
+  deleteSession,
+  sessions,
+  sharedSessionsEnabled,
+} from "../../../server/store";
 import { presentSession } from "../../../server/presentation";
 import { scenarioRepository } from "../../../server/scenario-repository";
 import { scenarioIdSchema } from "../../../scenarios/authoring";
@@ -37,9 +46,8 @@ const commandSchema = z.discriminatedUnion("action", [
 ]);
 const fail = (error: string, status: number) =>
   NextResponse.json({ error }, { status });
-export async function GET(request: NextRequest) {
-  pruneSessions();
-  const entry = sessions.get(
+async function handleGet(request: NextRequest) {
+  const entry = await getSession(
     request.cookies.get("practice_session")?.value ?? "",
   );
   return NextResponse.json(
@@ -54,7 +62,7 @@ export async function GET(request: NextRequest) {
     { headers: { "Cache-Control": "no-store" } },
   );
 }
-export async function POST(request: NextRequest) {
+async function handlePost(request: NextRequest) {
   // Next.js may normalize the internal hostname (127.0.0.1 to localhost).
   // Validate against the public Host header the browser actually addressed.
   const expectedOrigin = `${request.nextUrl.protocol}//${request.headers.get("host") ?? request.nextUrl.host}`;
@@ -74,10 +82,9 @@ export async function POST(request: NextRequest) {
   const parsed = commandSchema.safeParse(raw);
   if (!parsed.success) return fail(parsed.error.issues[0].message, 400);
   const command = parsed.data;
-  pruneSessions();
   try {
     const id = request.cookies.get("practice_session")?.value ?? "";
-    const entry = sessions.get(id);
+    const entry = await getSession(id);
     if (entry?.live && command.action !== "start")
       return fail(
         "Finish the live conversation before using text controls.",
@@ -87,12 +94,14 @@ export async function POST(request: NextRequest) {
       getProvider(); // Validate configuration before starting.
       if (entry?.busy)
         return fail("A turn is still processing. Please wait.", 409);
-      if (!entry && sessions.size >= 1000)
+      if (!sharedSessionsEnabled() && !entry && sessions.size >= 1000)
         return fail(
           "The practice server is full. Please try again later.",
           503,
         );
-      if (entry) entry.busy = true;
+      if (entry && !(await lockSession(entry)))
+        return fail("A turn is still processing. Please retry.", 409);
+      let replaced = false;
       try {
         const record = await scenarioRepository.get(
           command.scenarioId ?? duplicateCharge.id,
@@ -104,13 +113,16 @@ export async function POST(request: NextRequest) {
           );
         const scenario = structuredClone(record.scenario);
         const state = startSession(scenario, crypto.randomUUID(), Date.now());
-        sessions.set(state.id, {
+        await createSession({
           state,
           scenario,
           touchedAt: Date.now(),
           busy: false,
         });
-        if (entry) sessions.delete(id);
+        if (entry) {
+          await deleteSession(entry);
+          replaced = true;
+        }
         const response = NextResponse.json({
           session: presentSession(state, scenario),
         });
@@ -123,7 +135,7 @@ export async function POST(request: NextRequest) {
         });
         return response;
       } finally {
-        if (entry) entry.busy = false;
+        if (entry && !replaced) await releaseSession(entry);
       }
     }
     if (!entry)
@@ -145,7 +157,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         session: presentSession(entry.state, scenario),
       });
-    entry.busy = true;
+    if (!(await lockSession(entry)))
+      return fail("A turn is still processing. Please retry.", 409);
     try {
       entry.state =
         command.action === "end"
@@ -169,7 +182,7 @@ export async function POST(request: NextRequest) {
         session: presentSession(entry.state, scenario),
       });
     } finally {
-      entry.busy = false;
+      await releaseSession(entry);
     }
   } catch (error) {
     console.error(
@@ -179,8 +192,12 @@ export async function POST(request: NextRequest) {
     const message = error instanceof Error ? error.message : "";
     if (/AI_PROVIDER|OPENAI_API_KEY/.test(message)) return fail(message, 503);
     return fail(
-      "We could not process that turn. Your conversation is unchanged. Please retry. If this persists, check the provider configuration and connection.",
+      "We could not confirm that request. Please retry. If this persists, check session storage and the provider connection.",
       502,
     );
   }
 }
+
+export const GET = withSessionErrors(handleGet);
+
+export const POST = withSessionErrors(handlePost);

@@ -1,6 +1,7 @@
+import { withSessionErrors } from "../../../server/session-errors";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { sessions, pruneSessions } from "../../../server/store";
+import { getSession, lockSession, releaseSession } from "../../../server/store";
 import { connectRealtime, liveGreeting } from "../../../server/realtime";
 import { getProvider } from "../../../server/config";
 import { presentSession } from "../../../server/presentation";
@@ -42,7 +43,7 @@ const schema = z.discriminatedUnion("action", [
 const json = (body: unknown, status = 200) =>
   NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
 
-export async function POST(request: NextRequest) {
+async function handlePost(request: NextRequest) {
   const origin = `${request.nextUrl.protocol}//${request.headers.get("host") ?? request.nextUrl.host}`;
   if (request.headers.get("origin") && request.headers.get("origin") !== origin)
     return json({ error: "Cross-origin requests are not allowed." }, 403);
@@ -71,8 +72,7 @@ export async function POST(request: NextRequest) {
   if (!parsed.success)
     return json({ error: "Invalid live conversation request." }, 400);
   const command = parsed.data;
-  pruneSessions();
-  const entry = sessions.get(
+  const entry = await getSession(
     request.cookies.get("practice_session")?.value ?? "",
   );
   if (!entry || entry.state.id !== command.sessionId)
@@ -85,7 +85,8 @@ export async function POST(request: NextRequest) {
       503,
     );
   const scenario = entry.scenario ?? duplicateCharge;
-  entry.busy = true;
+  if (!(await lockSession(entry)))
+    return json({ error: "Scoring is still processing. Please retry." }, 409);
   try {
     if (command.action === "connect") {
       if (
@@ -205,6 +206,8 @@ export async function POST(request: NextRequest) {
       502,
     );
   } finally {
-    entry.busy = false;
+    await releaseSession(entry);
   }
 }
+
+export const POST = withSessionErrors(handlePost);
